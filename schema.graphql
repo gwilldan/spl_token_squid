@@ -1,0 +1,11 @@
+type Transfer @entity {
+    id: ID!
+    mint: String! @index
+    from: String! @index
+    to: String! @index
+    amount: BigInt! @index
+    timestamp: DateTime!
+    slot: Int!
+    blockNumber: Int!
+    txHash: String! @index
+}
