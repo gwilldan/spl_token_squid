@@ -2,12 +2,11 @@ import { run } from "@subsquid/batch-processor";
 import { augmentBlock } from "@subsquid/solana-objects";
 import { DataSourceBuilder, SolanaRpcClient } from "@subsquid/solana-stream";
 import { TypeormDatabase } from "@subsquid/typeorm-store";
-import assert from "assert";
 import * as tokenProgram from "./abi/token-program";
 import bs58 from "bs58";
 import { Transfer } from "./model/generated";
 
-const mint = "Grass7B4RdKfBCjTKgSqnXkqjwiGvQyFbuSCUJr3XXjs";
+const mint = "DBRiDgJAMsM95moTzJs7M9LnkGErpbv9v6CUR1DXnUu5";
 
 // First we create a DataSource - component,
 // that defines where to get the data and what data should we get.
@@ -77,8 +76,8 @@ const dataSource = new DataSourceBuilder()
 		},
 		tokenBalance: {
 			// token balance record fields
-			preAmount: true,
-			postAmount: true,
+			preAmount: false,
+			postAmount: false,
 			preOwner: true,
 			postOwner: true,
 		},
@@ -90,27 +89,28 @@ const dataSource = new DataSourceBuilder()
 	// Each .addXxx() method accepts item selection criteria
 	// and also allows to request related items.
 	//
-	.addInstruction({
-		// select instructions, that:
-		where: {
-			programId: [tokenProgram.programId], // where executed by token program
-			d1: [tokenProgram.instructions.transfer.d1],
-			isCommitted: true, // where successfully committed
-		},
-		// for each instruction selected above
-		// make sure to also include:
-		include: {
-			innerInstructions: true, // inner instructions
-			transaction: true, // transaction, that executed the given instruction
-			transactionTokenBalances: true, // all token balance records of executed transaction
-		},
-	})
+	// .addInstruction({
+	//   // select instructions, that:
+	//   where: {
+	//     programId: [tokenProgram.programId], // where executed by token program
+	//     d1: [tokenProgram.instructions.transfer.d1],
+	//     isCommitted: true, // where successfully isCommitted
+	//   },
+	//   // for each instruction selected above
+	//   // make sure to also include:
+	//   include: {
+	//     innerInstructions: true, // inner instructions
+	//     transaction: true, // transaction, that executed the given instruction
+	//     transactionTokenBalances: true, // all token balance records of executed transaction
+	//   },
+	// })
 	.addTokenBalance({
 		where: {
 			// the token program which the mint belongs - Token2022 (TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb) or Token (TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA)
 			preProgramId: [tokenProgram.programId],
+			// postProgramId: [tokenProgram.programId],
 			preMint: [mint],
-			postMint: [mint],
+			// postMint: [mint],
 		},
 		include: {
 			transaction: true, // transaction, that executed the given instruction
@@ -119,93 +119,124 @@ const dataSource = new DataSourceBuilder()
 	})
 	.build();
 
-// Constants for frequently used conditions
-const TRANSFER_INSTRUCTION_D1 = tokenProgram.instructions.transfer.d1;
-const BATCH_SIZE = 500;
+// Once we've prepared a data source we can start fetching the data right away:
+//
+// for await (let batch of dataSource.getBlockStream()) {
+//     for (let block of batch) {
+//         console.log(block)
+//     }
+// }
+//
+// However, Subsquid SDK can also help to decode and persist the data.
+//
 
+// Data processing in Subsquid SDK is defined by four components:
+//
+//  1. Data source (such as we've created above)
+//  2. Database
+//  3. Data handler
+//  4. Processor
+//
+// Database is responsible for persisting the work progress (last processed block)
+// and for providing storage API to the data handler.
+//
+// Data handler is a user defined function which accepts consecutive block batches,
+// storage API and is responsible for entire data transformation.
+//
+// Processor connects and executes above three components.
+//
+
+// Below we create a TypeormDatabase.
+//
+// It provides restricted subset of [TypeORM EntityManager API](https://typeorm.io/working-with-entity-manager)
+// as a persistent storage interface and works with any Postgres-compatible database.
+//
+// Note, that we don't pass any database connection parameters.
+// That's because TypeormDatabase expects a certain project structure
+// and environment variables to pick everything it needs by convention.
+// Companion @subsquid/typeorm-migration tool works in the same way.
+//
+// For full configuration details please consult
+// https://github.com/subsquid/squid-sdk/blob/278195bd5a5ed0a9e24bfb99ee7bbb86ff94ccb3/typeorm/typeorm-config/src/config.ts#L21
 const database = new TypeormDatabase();
 
 // Now we are ready to start data processing
-run(
-	dataSource,
-	database,
-	async (ctx: {
-		blocks: any[];
-		store: { insert: (data: Transfer[]) => Promise<void> };
-	}) => {
-		let blocks = ctx.blocks.map(augmentBlock);
-		let transfers: Transfer[] = [];
+run(dataSource, database, async (ctx) => {
+	// Block items that we get from ctx.blocks are flat JS objects.
+	//
+	// We can use augmentBlock() function from @subsquid/solana-objects
+	// to enrich block items with references to related objects and
+	// with convenient getters for derived data (e.g. Instruction.d8).
+	let blocks = ctx.blocks.map(augmentBlock);
 
-		for (let block of blocks) {
-			for (let ins of block.instructions) {
-				// Fast-path rejection for non-matching instructions
-				if (
-					ins.programId !== tokenProgram.programId ||
-					ins.d1 !== TRANSFER_INSTRUCTION_D1
-				) {
-					continue;
-				}
+	let transfers: Transfer[] = [];
 
-				const source = ins.accounts[0];
-				const destination = ins.accounts[1];
+	for (let block of blocks) {
+		for (let ins of block.instructions) {
+			// https://read.cryptodatabytes.com/p/starter-guide-to-solana-data-analysis
 
-				// Get transaction once and reuse
-				const transaction = ins.getTransaction();
-				const tokenBalances = transaction.tokenBalances;
-
-				// Use find with direct comparison for better performance
-				const srcTransfer = tokenBalances.find((tb) => tb.account === source);
-				if (!srcTransfer || srcTransfer.preMint !== mint) {
-					continue;
-				}
-
-				const from = srcTransfer.preOwner;
-				const desTransfer = tokenBalances.find(
-					(tb) => tb.account === destination
-				);
-				const to =
-					desTransfer?.postOwner || desTransfer?.preOwner || destination;
-
-				const amount = decodeSplTransferAmountFromBase58(ins.data);
-
-				transfers.push(
-					new Transfer({
-						id: ins.id,
-						mint: srcTransfer.preMint,
-						from,
-						to,
-						amount,
-						timestamp: new Date(block.header.timestamp * 1000),
-						slot: block.header.slot,
-						blockNumber: block.header.height,
-						txHash: transaction.signatures[0],
-					})
-				);
-
-				// Batch insert when we reach the batch size
-				if (transfers.length >= BATCH_SIZE) {
-					await ctx.store.insert(transfers);
-					transfers = [];
-				}
+			if (
+				ins.programId !== tokenProgram.programId ||
+				ins.d1 !== tokenProgram.instructions.transfer.d1
+			) {
+				continue;
 			}
-		}
+			const source = ins.accounts[0];
+			const destination = ins.accounts[1];
 
-		// Insert any remaining transfers
-		if (transfers.length > 0) {
-			await ctx.store.insert(transfers);
+			const tx = ins.getTransaction();
+
+			const srcTransfer = tx.tokenBalances.find((tb) => tb.account == source);
+
+			const tokenMint = srcTransfer?.preMint;
+
+			if (tokenMint !== mint) {
+				continue;
+			}
+
+			const from = srcTransfer?.preOwner;
+			const desTransfer = tx.tokenBalances.find(
+				(tb) => tb.account === destination
+			);
+
+			const to = desTransfer?.postOwner || desTransfer?.preOwner || destination;
+
+			const amount = decodeSplTransferAmountFromBase58(ins.data);
+
+			transfers.push(
+				new Transfer({
+					id: ins.id,
+					mint: tokenMint,
+					from,
+					to,
+					amount,
+					timestamp: new Date(block.header.timestamp * 1000),
+					slot: block.header.slot,
+					blockNumber: block.header.height,
+					txHash: tx.signatures[0],
+				})
+			);
 		}
 	}
-);
 
-// Optimized amount decoding function using TypedArray for better performance
+	await ctx.store.insert(transfers);
+});
+
 function decodeSplTransferAmountFromBase58(dataBase58: string): bigint {
 	const data = bs58.decode(dataBase58);
 
-	if (data[0] !== 3 || data.length < 9) {
-		throw new Error("Invalid SPL Token Transfer instruction");
+	if (data[0] !== 3) {
+		throw new Error("Not a SPL Token Transfer instruction");
 	}
 
-	// Use DataView for more efficient binary data handling
-	const view = new DataView(data.buffer, data.byteOffset + 1, 8);
-	return BigInt(view.getBigUint64(0, true)); // true for little-endian
+	if (data.length < 9) {
+		throw new Error("Invalid instruction data length");
+	}
+
+	const amountBytes = data.slice(1, 9);
+	const amount = BigInt(
+		amountBytes.reduce((acc, byte, i) => acc + (byte << (8 * i)), 0)
+	);
+
+	return amount;
 }
