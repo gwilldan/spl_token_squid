@@ -1,4 +1,5 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, Index as Index_, BigIntColumn as BigIntColumn_, DateTimeColumn as DateTimeColumn_, IntColumn as IntColumn_} from "@subsquid/typeorm-store"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, BigIntColumn as BigIntColumn_, DateTimeColumn as DateTimeColumn_, IntColumn as IntColumn_} from "@subsquid/typeorm-store"
+import {Owner} from "./owner.model"
 
 @Entity_()
 export class Transfer {
@@ -9,19 +10,17 @@ export class Transfer {
     @PrimaryColumn_()
     id!: string
 
-    @Index_()
     @StringColumn_({nullable: false})
-    mint!: string
+    token!: string
 
     @Index_()
-    @StringColumn_({nullable: false})
-    from!: string
+    @ManyToOne_(() => Owner, {nullable: true})
+    from!: Owner
 
     @Index_()
-    @StringColumn_({nullable: false})
-    to!: string
+    @ManyToOne_(() => Owner, {nullable: true})
+    to!: Owner
 
-    @Index_()
     @BigIntColumn_({nullable: false})
     amount!: bigint
 
@@ -34,7 +33,6 @@ export class Transfer {
     @IntColumn_({nullable: false})
     blockNumber!: number
 
-    @Index_()
     @StringColumn_({nullable: false})
-    txHash!: string
+    signature!: string
 }

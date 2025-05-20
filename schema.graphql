@@ -1,11 +1,16 @@
+type Owner @entity {
+	id: ID! # owner address
+	balance: BigInt! # balance of the token
+}
+
 type Transfer @entity {
-    id: ID!
-    mint: String! @index
-    from: String! @index
-    to: String! @index
-    amount: BigInt! @index
-    timestamp: DateTime!
-    slot: Int!
-    blockNumber: Int!
-    txHash: String! @index
+	id: ID! #transaction hash
+	token: String! #the mint address of the token
+	from: Owner!
+	to: Owner!
+	amount: BigInt!
+	timestamp: DateTime!
+	slot: Int!
+	blockNumber: Int!
+	signature: String! #the signature of the transaction
 }
