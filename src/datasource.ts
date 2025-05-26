@@ -17,7 +17,7 @@ export const dataSource = new DataSourceBuilder()
 					strideConcurrency: 10,
 			  }
 	)
-	.setBlockRange({ from: 289819150 })
+	.setBlockRange({ from: 299804550 })
 	.setFields({
 		block: {
 			timestamp: true,

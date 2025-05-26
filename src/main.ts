@@ -79,10 +79,9 @@ run(dataSource, database, async (ctx) => {
 
 	const transfers: Transfer[] = createTransfers(rawTransfers, owners);
 
-	await Promise.all([
-		ctx.store.upsert([...owners.values()]),
-		ctx.store.insert(transfers),
-	]);
+
+	await ctx.store.upsert([...owners.values()]);
+	await ctx.store.insert(transfers);
 });
 
 function createOwners(rawTransfers: RawTransfer[]): Map<string, Owner> {
@@ -125,10 +124,16 @@ function decodeSplTransferAmountFromBase58(dataBase58: string): bigint {
 		throw new Error("Invalid instruction data length");
 	}
 
+	// Little-endian 64-bit unsigned integer
 	const amountBytes = data.slice(1, 9);
-	const amount = BigInt(
-		amountBytes.reduce((acc, byte, i) => acc + (byte << (8 * i)), 0)
-	);
+
+	// Convert little-endian bytes to hex string (reversed order)
+	const hex = [...amountBytes]
+		.reverse()
+		.map((byte) => byte.toString(16).padStart(2, "0"))
+		.join("");
+
+	const amount = BigInt("0x" + hex);
 
 	return amount;
 }
